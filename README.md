@@ -39,7 +39,7 @@ Now CMAKE can find CGAL.
 installed CMAKE will find it and build upon it.</p>
 <p>The software has a test application testGeodesic which is called by</p>
 <p>testGeodesic pointcloud.xyz</p> 
-<p>The  argument is the point cloud to be smoothed which is a text file of points of the form "x y z nx ny nz" for each line (x, y, z the point coordinates, nx, ny, nz the normal coordinates).</p><br />
+<p>The  argument is the point cloud to which random geodesics will be drawn. It is a text file of points of the form "x y z nx ny nz" for each line (x, y, z the point coordinates, nx, ny, nz the normal coordinates).</p><br />
 
 <p align="center">
 <img src="./images/Logo_En.jpg" alt="logo" style="width: 85%;">    
