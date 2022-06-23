@@ -1,3 +1,5 @@
+.idea
+cmake-build-release
 CMakeLists.txt.user
 CMakeCache.txt
 CMakeFiles
