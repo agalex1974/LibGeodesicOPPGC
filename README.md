@@ -2,7 +2,7 @@
 ## Implementation of:
 # Optimal Point-to-Point Geodesic Path Generation on Point Clouds
 ### Authors: Dr. Alexander Agathos(1) & Prof. Philip Azariadis(2)
-### (1)University of Aegean, (2) University of West Attica
+### (1)University of the Aegean, (2)University of West Attica
 <p align="center">
 <img src="./images/bunny.jpg" alt="results">    
 </p>
@@ -13,10 +13,9 @@
     <li>oneAPI MKL</li>
     <li>oneAPI Thread Building Blocks</li>
 </ul>
-<p>Installation on Windows with the Microsoft Visual Studio (Community) 2022 is described in the following.</p>
+<p>Installation on Windows with Microsoft Visual Studio (Community) 2022 is described in the following.</p>
 <p>Please consider using the <a href="https://cmake.org/download/">cmake-gui tool</a>.</p>
-<p>This is the most advisable way to build the software as it will build the 
-solution of Visual Studio automatically.  
+
 <p><b><i>Boost installation</i></b></p>
 <p>The most easy way to install boost is to visit <a href="https://sourceforge.net/projects/boost/">this</a> link. Please choose 
 to download a file like boost_1_79_0-msvc-14.1-64.exe. This file installs the BOOST library in 
