@@ -9,7 +9,7 @@
 #include <iostream>
 #include <utility> // defines std::pair
 #include <list>
-
+#include <execution>
 #include "CPointCloud.h"
 #include "cmathutilities.h"
 
@@ -404,69 +404,75 @@ bool CPointCloud::GeodesicDijkstra(const CPointEx3D& start, const CPointEx3D& en
 
 
 void CPointCloud::calculateGeodesicPositionAndNormals(const std::vector<CPointEx3D>& normalizedPoints,
-	std::vector<CPointEx3D>& pathPoints, std::vector<CPointEx3D>& pathNormals, double min, double max) const
+	std::vector<CPointEx3D>& pathPoints, std::vector<CPointEx3D>& pathNormals, double min, double max, double alpha) const
 {
-	auto isEllipicGabrielNeighbor = [&normalizedPoints](const CPointEx3D& originPoint, int i, const std::vector<int>& NNs, double a)
-	{
-		const CPointEx3D& p = originPoint;
-		const CPointEx3D& qi = normalizedPoints[NNs[i]];
-		const CPointEx3D origin = 0.5 * (p + qi);
-		const double d = (qi - p).norm() / 2.0;
-		CPointEx3D localXaxis = qi - p;
-		localXaxis.normalize();
-//		CDoubleMatrix transformationMatrix = CreateEGGLocalCoordinateSystem(origin, localXaxis);
-		Matrix4x4 transformationMatrix;
-		CreateEGGLocalCoordinateSystem(transformationMatrix, origin, localXaxis);
-		for (int j = 0; j < i; j++)
-		{
-//			CPointEx3D pnt = VectorToPoint(Mult(transformationMatrix, PointToVector(normalizedPoints[NNs[j]])));
-//			CPointEx3D pnt = VectorToPoint(Mult_External(transformationMatrix, PointToVector(normalizedPoints[NNs[j]])));			double x = pnt.x, y = pnt.y, z = pnt.z;
-			CPointEx3D pnt = mult4x4(transformationMatrix, normalizedPoints[NNs[j]]);
-			double x = pnt.x, y = pnt.y, z = pnt.z;
-			double ellipsoidValue = x * x + y * y / (a * a) + z * z / (a * a);
-			if (ellipsoidValue < d * d) return false;
-		}
-		return true;
-	};
+    auto isEllipicGabrielNeighbor = [&normalizedPoints](const CPointEx3D& originPoint, int i, const std::vector<int>& NNs, double a)
+    {
+        const CPointEx3D& p = originPoint;
+        const CPointEx3D& qi = normalizedPoints[NNs[i]];
+        const CPointEx3D origin = 0.5 * (p + qi);
+        const double d = (qi - p).norm() / 2.0;
+        CPointEx3D localXaxis = qi - p;
+        localXaxis.normalize();
+        //		CDoubleMatrix transformationMatrix = CreateEGGLocalCoordinateSystem(origin, localXaxis);
+        Matrix4x4 transformationMatrix;
+        CreateEGGLocalCoordinateSystem(transformationMatrix, origin, localXaxis);
+        for (int j = 0; j < i; j++)
+        {
+            //			CPointEx3D pnt = VectorToPoint(Mult(transformationMatrix, PointToVector(normalizedPoints[NNs[j]])));
+            //			CPointEx3D pnt = VectorToPoint(Mult_External(transformationMatrix, PointToVector(normalizedPoints[NNs[j]])));			double x = pnt.x, y = pnt.y, z = pnt.z;
+            CPointEx3D pnt = mult4x4(transformationMatrix, normalizedPoints[NNs[j]]);
+            double x = pnt.x, y = pnt.y, z = pnt.z;
+            double ellipsoidValue = x * x + y * y / (a * a) + z * z / (a * a);
+            if (ellipsoidValue < d * d) return false;
+        }
+        return true;
+    };
 
-	int curvePointCount = pathPoints.size();
-	//pathNormals.push_back(normals[]);
-	tbb::parallel_for(tbb::blocked_range<int>(1, curvePointCount - 1),
-		[&](tbb::blocked_range<int> r)
-		{
-//			for (int i = 1; i < curvePointCount - 1; i++)
-			for (int i = r.begin(); i < r.end(); i++)
-			{
-				std::vector<int> curveGabrielNeighbors;
-				CPointEx3D originPoint = pathPoints[i];
-				auto pointNNs = GetKNearestNeighborIndex(denormalizeCoordinate(originPoint, min, max), 30);
-				if ((originPoint - normalizedPoints[pointNNs[0]]).norm()>1e-6) {
-					for (int j = 0; j < pointNNs.size(); j++) {
-						if (isEllipicGabrielNeighbor(originPoint, j, pointNNs, 0.5)) {
-							curveGabrielNeighbors.push_back(pointNNs[j]);
-						}
-					}
-					double sumW = 0;
-					CPointEx3D normal(0.0, 0.0, 0.0);
-					CPointEx3D sumPoint(0.0, 0.0, 0.0);
-					for (auto idx : curveGabrielNeighbors) {
-						auto direction = normalizedPoints[idx] - originPoint;
-						double dist = direction.norm();
-						double w = exp(-dist * dist);
-						normal += w * (*normals)[idx];
-						sumPoint += w * direction;
-						sumW += w;
-					}
-					normal /= sumW;
-					normal.normalize();
-					sumPoint /= sumW;
-					auto projPoint = dot(sumPoint, normal) * normal;
-					pathPoints[i] += 0.6 * projPoint;
-					pathNormals[i] = normal;
-				}
-				else pathNormals[i] = (*normals)[pointNNs[0]];
-			}
-		});
+    int curvePointCount = pathPoints.size();
+    //pathNormals.push_back(normals[]);
+    tbb::parallel_for(tbb::blocked_range<int>(1, curvePointCount - 1),
+                      [&](tbb::blocked_range<int> r)
+                      {
+                          for (int i = r.begin(); i < r.end(); i++)
+                          {
+                              CPointEx3D originPoint = pathPoints[i];
+                              std::vector<int> curveGabrielNeighbors;
+                              auto pointNNs = GetKNearestNeighborIndex(denormalizeCoordinate(originPoint, min, max), 30);
+                              if (originPoint != normalizedPoints[pointNNs[0]]) {
+                                  for (int j = 0; j < pointNNs.size(); j++) {
+                                      //double alpha = 1e-12; when noise is high
+                                      //double alpha = 0.5; when noise is normal
+                                      if (isEllipicGabrielNeighbor(originPoint, j, pointNNs, alpha)) {
+                                          curveGabrielNeighbors.push_back(pointNNs[j]);
+                                      }
+                                  }
+                                  double c0 = 0.;
+                                  CPointEx3D normal(0., 0., 0.);
+                                  CPointEx3D c(0., 0., 0.);
+                                  for (auto idx : curveGabrielNeighbors) {
+                                      auto direction = normalizedPoints[idx] - originPoint;
+                                      double dist = direction.norm();
+                                      double w = exp(-dist * dist);
+                                      normal += w * (*normals)[idx];
+                                      c.x += w * normalizedPoints[idx].x;
+                                      c.y += w * normalizedPoints[idx].y;
+                                      c.z += w * normalizedPoints[idx].z;
+                                      c0 += w;
+                                  }
+                                  normal /= c0;
+                                  normal.normalize();
+                                  double lambda = (c.x * normal.x + c.y * normal.y + c.z * normal.z) / c0;
+                                  double t = lambda - dot(pathPoints[i], normal);
+                                  pathPoints[i] += t * normal;
+                                  pathNormals[i] = normal;
+                              }
+                              else
+                              {
+                                  pathNormals[i] = (*normals)[pointNNs[0]];
+                              }
+                          }
+                      });
 }
 
 CPointEx3D CPointCloud::normalizeCoordinate(const CPointEx3D& p, double minNormalizedExtent, double maxNormalizedExtent) {
@@ -490,74 +496,101 @@ double CPointCloud::sqr_length(const std::vector<CPointEx3D>& path) {
 	return d2;
 }
 
-bool CPointCloud::GeodesicFlow(std::vector<CPointEx3D>& path)
+bool CPointCloud::GeodesicFlow(std::vector<CPointEx3D>& path, double lambda, double mu, double alpha)
 {
-	double maxx = -1e10;
-	double minx = 1e10;
-	double maxy = -1e10;
-	double miny = 1e10;
-	double maxz = -1e10;
-	double minz = 1e10;
-	for (int i = 0; i < points->size(); i++)
-	{
-		if ((*points)[i].x > maxx) maxx = (*points)[i].x;
-		if ((*points)[i].x < minx) minx = (*points)[i].x;
-		if ((*points)[i].y > maxy) maxy = (*points)[i].y;
-		if ((*points)[i].y < miny) miny = (*points)[i].y;
-		if ((*points)[i].z > maxz) maxz = (*points)[i].z;
-		if ((*points)[i].z < minz) minz = (*points)[i].z;
-	}
+    std::vector<CPointEx3D> pathNormals(path.size());
+    getNormalWithGabrielNeighborWeighting(path, pathNormals);
+    double maxx = -1e10;
+    double minx = 1e10;
+    double maxy = -1e10;
+    double miny = 1e10;
+    double maxz = -1e10;
+    double minz = 1e10;
+    for (int i = 0; i < points->size(); i++)
+    {
+        if ((*points)[i].x > maxx) maxx = (*points)[i].x;
+        if ((*points)[i].x < minx) minx = (*points)[i].x;
+        if ((*points)[i].y > maxy) maxy = (*points)[i].y;
+        if ((*points)[i].y < miny) miny = (*points)[i].y;
+        if ((*points)[i].z > maxz) maxz = (*points)[i].z;
+        if ((*points)[i].z < minz) minz = (*points)[i].z;
+    }
 
-	double max = maxx;
-	if (max < maxy) max = maxy;
-	if (max < maxz) max = maxz;
+    double max = maxx;
+    if (max < maxy) max = maxy;
+    if (max < maxz) max = maxz;
 
-	double min = minx;
-	if (min > miny) min = miny;
-	if (min > minz) min = minz;
+    double min = minx;
+    if (min > miny) min = miny;
+    if (min > minz) min = minz;
+    auto EucledianDistance = [this](int i, int j)
+    {
+        return ((*points)[i] - (*points)[j]).norm();
+    };
 
-	std::for_each(path.begin(), path.end(),
-		[min, max](CPointEx3D& p) {p = normalizeCoordinate(p, min, max); });
+    std::for_each(path.begin(), path.end(),
+                  [min, max](CPointEx3D& p) {p = normalizeCoordinate(p, min, max); });
 
-	std::vector<CPointEx3D> normalizedPoints = *points;
-	std::for_each(normalizedPoints.begin(), normalizedPoints.end(),
-		[min, max](CPointEx3D& p) {p = normalizeCoordinate(p, min, max); });
-	std::vector<CPointEx3D> pathNormals(path.size());
-	calculateGeodesicPositionAndNormals(normalizedPoints, path, pathNormals, min, max);
-	int m = path.size();
+    std::vector<CPointEx3D> normalizedPoints = *points;
+    std::for_each(normalizedPoints.begin(), normalizedPoints.end(),
+                  [min, max](CPointEx3D& p) {p = normalizeCoordinate(p, min, max); });
 
-	mem_vecs.Init(m);
-	double length1 = sqr_length(path);
-	double length2 = -1e12;
-	const double TOL = 1e-6 * 1e-6; // convergence criterion
-	int k = 0;
-	while (k++ < 2453 && fabs(length2-length1)>TOL){
+    std::vector<CPointEx3D> correctedCurve = path;
+    int m = path.size();
+    double length1 = sqr_length(path);
+    double length2 = -1e12;
+    const double TOL = 1e-6 * 1e-6; // convergence criterion
+    int k = 0;
+    auto start = std::chrono::steady_clock::now();
+    _mem_vecs mem_vectors;
+    mem_vectors.Init(m);
+    FILE* file = fopen("Flows.txt", "w");
+    while (k++ < 2453 && fabs(length2 - length1)>TOL) {
+        double flow = getGeodesicFlowMKL(path, pathNormals, &mem_vectors);
+        CMathUtilities::ConjugateGradientMKL(mem_vectors.D2F, mem_vectors.DF, mem_vectors.DF, 3 * m);
+        for (int i = 1; i < m - 1; i++) {
+            CPointEx3D pk(mem_vectors.DF[3 * i + 0], mem_vectors.DF[3 * i + 1], mem_vectors.DF[3 * i + 2]);
+            auto p = path[i] + pk;
+            correctedCurve[i] = p;
+        }
+        calculateGeodesicPositionAndNormals(normalizedPoints, correctedCurve, pathNormals, min, max, alpha);
+        path = correctedCurve;
+        std::vector<CPointEx3D> pathSmooth = path;
 
-		getGeodesicFlowMKL(path, pathNormals, mem_vecs.DF, mem_vecs.D2F);
-		CMathUtilities::ConjugateGradientMKL(mem_vecs.D2F, mem_vecs.DF, mem_vecs.DF, 3 * m);
-		std::vector<CPointEx3D> correctedCurve;
-		correctedCurve.push_back(path[0]);
-		for (int i = 1; i < m - 1; i++) {
-			CPointEx3D pk(mem_vecs.DF[3 * i + 0], mem_vecs.DF[3 * i + 1], mem_vecs.DF[3 * i + 2]);
-			auto p = path[i] + pk;
-			correctedCurve.push_back(p);
-		}
-		correctedCurve.push_back(path[m - 1]);
-		calculateGeodesicPositionAndNormals(normalizedPoints, correctedCurve, pathNormals, min, max);
-		path = correctedCurve;
-		if(length2<0)
-			length2 = sqr_length(path);
-		else
-		{
-			length1 = length2;
-			length2 = sqr_length(path);
-		}
-	}
-	std::for_each(path.begin(), path.end(),
-		[min, max](CPointEx3D& p) {p = denormalizeCoordinate(p, min, max); });
-	
-	mem_vecs.Destroy();
-	return true;
+        for (int l = 0; l < 4; l++)
+        {
+            for (int i = 1; i < path.size() - 1; i++)
+            {
+                auto Laplacian = 0.5 * (path[i + 1] + path[i - 1]) - path[i];
+                pathSmooth[i] = path[i] + lambda * Laplacian;
+            }
+            swap(path, pathSmooth);
+            for (int i = 1; i < path.size() - 1; i++)
+            {
+                auto Laplacian = 0.5 * (path[i + 1] + path[i - 1]) - path[i];
+                pathSmooth[i] = path[i] + mu * Laplacian;
+            }
+            swap(path, pathSmooth);
+        }
+
+        if (length2<0)
+            length2 = sqr_length(path);
+        else
+        {
+            length1 = length2;
+            length2 = sqr_length(path);
+        }
+    }
+
+    auto end = std::chrono::steady_clock::now();
+    std::cout << "Elapsed time in milliseconds: "
+              << std::chrono::duration_cast<std::chrono::milliseconds > (end - start).count()
+              << " ms" << std::endl;
+    std::cout << "iterations taken:" << k << std::endl;
+    std::for_each(path.begin(), path.end(),
+                  [min, max](CPointEx3D& p) {p = denormalizeCoordinate(p, min, max); });
+    mem_vectors.Destroy();
+    return true;
 }
 
 void CPointCloud::calculateNeighbors(std::vector<std::vector<int>>& NNs, int neighborCount) const
@@ -601,46 +634,64 @@ void CPointCloud::_mem_vecs::Destroy() {
 }
 
 
-void CPointCloud::getGeodesicFlowMKL(const std::vector<CPointEx3D>& curvePoints, const std::vector<CPointEx3D>& curveNormals, double*& DF, double*& D2F) {
-	int m = curvePoints.size();
+double CPointCloud::getGeodesicFlowMKL(const std::vector<CPointEx3D>& curvePoints, const std::vector<CPointEx3D>& curveNormals, _mem_vecs* mv) {
+    int m = curvePoints.size();
+    bool memory_already_allocated = false;
+    if (!mv) {
+        mv = new _mem_vecs;
+        mv->Init(m);
+    }
+    else
+    {
+        memory_already_allocated = true;
+    }
 
-	memset(mem_vecs.K, 0, 9 * m * m * sizeof(double));
-	int j = 0;
-	for (int i = 3; i < 3 * m - 3; i++) {
-		mem_vecs.K[3 * m * i + j] = -1;
-		mem_vecs.K[3 * m * i + j + 3] = 2;
-		mem_vecs.K[3 * m * i + j + 6] = -1;
-		j++;
-	}
+    memset(mv->K, 0, 9 * m * m * sizeof(double));
 
-	cblas_dcopy(9 * m * m, mem_vecs.K, 1, D2F, 1);
+    int j = 0;
+    for (int i = 3; i < 3 * m - 3; i++) {
+        mv->K[3 * m * i + j] = -1;
+        mv->K[3 * m * i + j + 3] = 2;
+        mv->K[3 * m * i + j + 6] = -1;
+        j++;
+    }
 
-	memset(mem_vecs.nT, 0, 3 * m * m * sizeof(double));
-	j = 0;
-	for (int i = 0; i < m; i++) {
-		mem_vecs.nT[3 * m * i + j] = curveNormals[i].x;
-		mem_vecs.nT[3 * m * i + j + 1] = curveNormals[i].y;
-		mem_vecs.nT[3 * m * i + j + 2] = curveNormals[i].z;
-		j += 3;
-	}
+    cblas_dcopy(9 * m * m, mv->K, 1, mv->D2F, 1);
 
-	int mm = 3 * m, kk = m, nn = 3 * m;
-	double alpha = 1.0, beta = 0.0;
+    memset(mv->nT, 0, 3 * m * m * sizeof(double));
+    j = 0;
+    for (int i = 0; i < m; i++) {
+        mv->nT[3 * m * i + j] = curveNormals[i].x;
+        mv->nT[3 * m * i + j + 1] = curveNormals[i].y;
+        mv->nT[3 * m * i + j + 2] = curveNormals[i].z;
+        j += 3;
+    }
 
-	cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, mm, nn, kk, alpha, mem_vecs.nT, mm, mem_vecs.nT, mm, beta, mem_vecs.nStar, nn);
-	cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, mm, mm, mm, -1.0, mem_vecs.nStar, mm, mem_vecs.K, mm, 1.0, D2F, mm);
-	cblas_dcopy(9 * m * m, D2F, 1, mem_vecs.kG, 1);
-	cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, mm, mm, mm, 1.0, D2F, mm, D2F, mm, 0.0, mem_vecs.K, mm);
-	cblas_dcopy(9 * m * m, mem_vecs.K, 1, D2F, 1);
+    int mm = 3 * m, kk = m, nn = 3 * m;
+    double alpha = 1.0, beta = 0.0;
 
-	for (int i = 0; i < m; i++) {
-		mem_vecs.p[3 * i + 0] = curvePoints[i].x;
-		mem_vecs.p[3 * i + 1] = curvePoints[i].y;
-		mem_vecs.p[3 * i + 2] = curvePoints[i].z;
-	}
+    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, mm, nn, kk, alpha, mv->nT, mm, mv->nT, mm, beta, mv->nStar, nn);
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, mm, mm, mm, -1.0, mv->nStar, mm, mv->K, mm, 1.0, mv->D2F, mm);
+    cblas_dcopy(9 * m * m, mv->D2F, 1, mv->kG, 1);
+    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, mm, mm, mm, 1.0, mv->D2F, mm, mv->D2F, mm, 0.0, mv->K, mm);
+    cblas_dcopy(9 * m * m, mv->K, 1, mv->D2F, 1);
 
-	cblas_dgemv(CblasRowMajor, CblasNoTrans, 3 * m, 3 * m, -1.0, D2F, 3 * m, mem_vecs.p, 1, 0.0, DF, 1);
+    for (int i = 0; i < m; i++) {
+        mv->p[3 * i + 0] = curvePoints[i].x;
+        mv->p[3 * i + 1] = curvePoints[i].y;
+        mv->p[3 * i + 2] = curvePoints[i].z;
+    }
 
+    cblas_dgemv(CblasRowMajor, CblasNoTrans, 3 * m, 3 * m, -1.0, mv->D2F, 3 * m, mv->p, 1, 0.0, mv->DF, 1);
+    cblas_dgemv(CblasRowMajor, CblasNoTrans, 3 * m, 3 * m, 1.0, mv->kG, 3 * m, mv->p, 1, 0.0, mv->flow, 1);
+
+    double flow_norm = cblas_dnrm2(3 * m, mv->flow, 1);
+    if (!memory_already_allocated)
+    {
+        mv->Destroy();
+        mv = nullptr;
+    }
+    return 1.0/sqrt(m) * flow_norm;
 }
 
 CPointCloud::~CPointCloud()
@@ -798,4 +849,102 @@ void CPointCloud::calculateNormals(bool bOriented) {
     }
     pointCloudSpatialTree = new Tree(boost::make_zip_iterator(boost::make_tuple(pointsCGAL.begin(), indicesCGAL.begin())),
                                      boost::make_zip_iterator(boost::make_tuple(pointsCGAL.end(), indicesCGAL.end())));
+}
+
+
+void CPointCloud::getNormalWithGabrielNeighborWeighting(const std::vector<CPointEx3D>& pointPath,
+                                                        std::vector<CPointEx3D>& normalPath) const
+{
+    std::vector<CPointEx3D> normalizedPoints = *points;
+    auto isEllipicGabrielNeighbor = [&normalizedPoints](const CPointEx3D& originPoint, int i, const std::vector<int>& NNs, double a)
+    {
+        const CPointEx3D& p = originPoint;
+        const CPointEx3D& qi = normalizedPoints[NNs[i]];
+        const CPointEx3D origin = 0.5 * (p + qi);
+        const double d = (qi - p).norm() / 2.0;
+        CPointEx3D localXaxis = qi - p;
+        localXaxis.normalize();
+        //		CDoubleMatrix transformationMatrix = CreateEGGLocalCoordinateSystem(origin, localXaxis);
+        Matrix4x4 transformationMatrix;
+        CreateEGGLocalCoordinateSystem(transformationMatrix, origin, localXaxis);
+        for (int j = 0; j < i; j++)
+        {
+            //			CPointEx3D pnt = VectorToPoint(Mult(transformationMatrix, PointToVector(normalizedPoints[NNs[j]])));
+            //			CPointEx3D pnt = VectorToPoint(Mult_External(transformationMatrix, PointToVector(normalizedPoints[NNs[j]])));			double x = pnt.x, y = pnt.y, z = pnt.z;
+            CPointEx3D pnt = mult4x4(transformationMatrix, normalizedPoints[NNs[j]]);
+            double x = pnt.x, y = pnt.y, z = pnt.z;
+            double ellipsoidValue = x * x + y * y / (a * a) + z * z / (a * a);
+            if (ellipsoidValue < d * d) return false;
+        }
+        return true;
+    };
+    double maxx = -1e10;
+    double minx = 1e10;
+    double maxy = -1e10;
+    double miny = 1e10;
+    double maxz = -1e10;
+    double minz = 1e10;
+    for (int i = 0; i < points->size(); i++)
+    {
+        if ((*points)[i].x > maxx) maxx = (*points)[i].x;
+        if ((*points)[i].x < minx) minx = (*points)[i].x;
+        if ((*points)[i].y > maxy) maxy = (*points)[i].y;
+        if ((*points)[i].y < miny) miny = (*points)[i].y;
+        if ((*points)[i].z > maxz) maxz = (*points)[i].z;
+        if ((*points)[i].z < minz) minz = (*points)[i].z;
+    }
+
+    double max = maxx;
+    if (max < maxy) max = maxy;
+    if (max < maxz) max = maxz;
+
+    double min = minx;
+    if (min > miny) min = miny;
+    if (min > minz) min = minz;
+
+    std::vector<CPointEx3D> pointsPathNorm = pointPath;
+    std::for_each(std::execution::par, pointsPathNorm.begin(), pointsPathNorm.end(),
+                  [min, max](CPointEx3D& p) {p = normalizeCoordinate(p, min, max); });
+
+
+    std::for_each(std::execution::par, normalizedPoints.begin(), normalizedPoints.end(),
+                  [min, max](CPointEx3D& p) {p = normalizeCoordinate(p, min, max); });
+    normalPath.resize(pointsPathNorm.size());
+
+    int curvePointCount = pointsPathNorm.size();
+    tbb::parallel_for(tbb::blocked_range<int>(0, curvePointCount),
+                      [&](tbb::blocked_range<int> r)
+                      {
+                          for (int i = r.begin(); i < r.end(); i++)
+                          {
+                              CPointEx3D originPoint = pointsPathNorm[i];
+
+                              std::vector<int> curveGabrielNeighbors;
+                              auto pointNNs = GetKNearestNeighborIndex(denormalizeCoordinate(originPoint, min, max), 30);
+                              if (originPoint != normalizedPoints[pointNNs[0]]) {
+                                  for (int j = 0; j < pointNNs.size(); j++) {
+                                      if (isEllipicGabrielNeighbor(originPoint, j, pointNNs, 0.5)) {
+                                          curveGabrielNeighbors.push_back(pointNNs[j]);
+                                      }
+                                  }
+                                  double c0 = 0.;
+                                  CPointEx3D normal(0.0, 0.0, 0.0);
+                                  CPointEx3D c(0., 0., 0.);
+                                  for (auto idx : curveGabrielNeighbors) {
+                                      auto direction = normalizedPoints[idx] - originPoint;
+                                      double dist = direction.norm();
+                                      double w = exp(-dist * dist);
+                                      normal += w * (*normals)[idx];
+                                      c0 += w;
+                                  }
+                                  normal /= c0;
+                                  normal.normalize();
+                                  normalPath[i] = normal;
+                              }
+                              else
+                              {
+                                  normalPath[i] = (*normals)[pointNNs[0]];
+                              }
+                          }
+                      });
 }

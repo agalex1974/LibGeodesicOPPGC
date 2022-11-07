@@ -169,8 +169,11 @@ namespace LIBGEODESIC {
 		 * @param path The path initial input and the corrected path as output
 		 * return patch correction success
 		 */
-		bool GeodesicFlow(std::vector<CPointEx3D>& path);
-
+		bool GeodesicFlow(std::vector<CPointEx3D>& path, double lambda = 0.05, double mu = -0.06, double alpha = 0.5);
+        double getGeodesicFlowMKL(const std::vector<CPointEx3D>& curvePoints, const std::vector<CPointEx3D>& curveNormals,
+                                  _mem_vecs* memory_vecs = nullptr);
+        void getNormalWithGabrielNeighborWeighting(const std::vector<CPointEx3D>& pointPath,
+                                                   std::vector<CPointEx3D>& normalPath) const;
 	private:
 		void updateSpatialTree();
 		static CDoubleMatrix CreateEGGLocalCoordinateSystem(const CPointEx3D& o, const CPointEx3D& d);
@@ -181,11 +184,10 @@ namespace LIBGEODESIC {
 		static CDoubleVector PointToVector(const CPointEx3D& pnt, bool homogenous = true);
 		static CPointEx3D VectorToPoint(const CVector<double>& pnt);
 		void calculateGeodesicPositionAndNormals(const std::vector<CPointEx3D>& normalizedPoints, std::vector<CPointEx3D>& pathPoints,
-			std::vector<CPointEx3D>& pathNormals, double min, double max) const;
+			std::vector<CPointEx3D>& pathNormals, double min, double max, double alpha = 0.5) const;
 		std::vector<int> GetKNearestNeighborIndex(const CPointEx3D& pnt, int K) const;
 		static CPointEx3D normalizeCoordinate(const CPointEx3D& p, double minNormalizedExtent, double maxNormalizedExtent);
 		static CPointEx3D denormalizeCoordinate(const CPointEx3D& p, double minNormalizedExtent, double maxNormalizedExtent);
-		void getGeodesicFlowMKL(const std::vector<CPointEx3D>& curvePoints, const std::vector<CPointEx3D>& curveNormals, double*& DF, double*& D2F);
 		static double sqr_length(const std::vector<CPointEx3D>& path);
 		std::vector<CPointEx3D>* points = nullptr;
 		std::vector<CPointEx3D>* normals = nullptr;
