@@ -1,10 +1,11 @@
 #pragma once
 
+#include <functional>
 #include <vector>
 #ifdef BUILD_DLL_EXPORTS
 #include "./NurbLibSt/MCLSEXST.h"
-#else
-#include "MCLSEXST.h"
+//#else
+//#include "MCLSEXST.h"
 #endif
 #ifndef DECLSPEC
 # if defined (BUILD_DLL_EXPORTS)
