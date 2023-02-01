@@ -193,7 +193,7 @@ namespace LIBGEODESIC {
 		bool GeodesicFlowEqConst(std::vector<CPointEx3D>& path, double lambda = 0.05, double mu = -0.06, double alpha = 0.5);
 		double getGeodesicFlowMKL(const std::vector<CPointEx3D>& curvePoints, const std::vector<CPointEx3D>& curveNormals,
                                   _mem_vecs* memory_vecs = nullptr);
-		double getGeodesicFlowMKL(const std::vector<CPointEx3D>& curvePoints, const std::vector<CPointEx3D>& curveNormals,
+		double getGeodesicFlowMKLEqConst(const std::vector<CPointEx3D>& curvePoints, const std::vector<CPointEx3D>& curveNormals,
 			_mem_vecs_eq* memory_vecs = nullptr);
         void getNormalWithGabrielNeighborWeighting(const std::vector<CPointEx3D>& pointPath,
                                                    std::vector<CPointEx3D>& normalPath) const;

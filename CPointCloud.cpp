@@ -595,7 +595,7 @@ bool CPointCloud::GeodesicFlow(std::vector<CPointEx3D>& path, double lambda, dou
 
 void CPointCloud::createD2FConstantPart(_mem_vecs_eq& mem_vectors) {
     int m = mem_vectors.m;
-    memset(mem_vectors.constStartFinish, 0, 18 * m * m * sizeof(double));
+    memset(mem_vectors.constStartFinish, 0, 18 * m * sizeof(double));
 
     int j = 0;
     for (int i = 0; i < 3; i++)
@@ -691,12 +691,13 @@ bool CPointCloud::GeodesicFlowEqConst(std::vector<CPointEx3D>& path, double lamb
     for (int i = 3; i < 6; i++) {
         mem_vectors.D[i] = path[m - 1][j++];
     }
+    createD2FConstantPart(mem_vectors);
 
     FILE* file = fopen("Flows.txt", "w");
-    while (k++ < 24 && fabs(length2 - length1)>TOL) {
+    while (k++ < 2490 && fabs(length2 - length1)>TOL) {
         std::cout << "iteration:" << k << std::endl;
-        double flow = getGeodesicFlowMKL(path, pathNormals, &mem_vectors);
-        CMathUtilities::ConjugateGradientMKL(mem_vectors.D2Faug, mem_vectors.DFaug, mem_vectors.DFaug, 4 * m + 6);
+        double flow = getGeodesicFlowMKLEqConst(path, pathNormals, &mem_vectors);
+        CMathUtilities::ConjugateGradientMKL(mem_vectors.D2Faug, mem_vectors.DFaug, mem_vectors.DFaug, 3 * m + 6);
         for (int i = 0; i < m; i++) {
             CPointEx3D pk(mem_vectors.DFaug[3 * i + 0], mem_vectors.DFaug[3 * i + 1], mem_vectors.DFaug[3 * i + 2]);
             auto p = path[i] + pk;
@@ -846,7 +847,7 @@ double CPointCloud::getGeodesicFlowMKL(const std::vector<CPointEx3D>& curvePoint
     return 1.0/sqrt(m) * flow_norm;
 }
 
-double CPointCloud::getGeodesicFlowMKL(const std::vector<CPointEx3D>& curvePoints, const std::vector<CPointEx3D>& curveNormals, _mem_vecs_eq* mv) {
+double CPointCloud::getGeodesicFlowMKLEqConst(const std::vector<CPointEx3D>& curvePoints, const std::vector<CPointEx3D>& curveNormals, _mem_vecs_eq* mv) {
     int m = curvePoints.size();
     bool memory_already_allocated = false;
     if (!mv) {
@@ -881,12 +882,13 @@ double CPointCloud::getGeodesicFlowMKL(const std::vector<CPointEx3D>& curvePoint
 
     int mm = 3 * m, kk = m, nn = 3 * m;
     double alpha = 1.0, beta = 0.0;
-
+    
     cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, mm, nn, kk, alpha, mv->nT, mm, mv->nT, mm, beta, mv->nStar, nn);
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, mm, mm, mm, -1.0, mv->nStar, mm, mv->K, mm, 1.0, mv->D2F, mm);
     cblas_dcopy(9 * m * m, mv->D2F, 1, mv->kG, 1);
     cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, mm, mm, mm, 1.0, mv->D2F, mm, mv->D2F, mm, 0.0, mv->K, mm);
     cblas_dcopy(9 * m * m, mv->K, 1, mv->D2F, 1);
+    
     // It has now the Jacobian
 
 #pragma omp parallel for
