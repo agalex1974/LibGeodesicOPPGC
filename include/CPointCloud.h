@@ -35,7 +35,26 @@ namespace LIBGEODESIC {
 			void Init(int m);
 			void Destroy();
 		} mem_vecs;  
-
+		struct _mem_vecs_eq {
+			double* K;
+			double* nStar;
+			double* kG;
+			double* nT;
+			double* p;
+			double* pm;
+			double* flow;
+			double* DF;
+			double* D2F;
+			double* DFaug;
+			double* D2Faug;
+			double* Dm;
+			double* D;
+			double* constStartFinish;
+			double* constStartFinishT;
+			int m;
+			void Init(int m);
+			void Destroy();
+		} mem_vecs_eq;
 	public:
 		CPointCloud();
 		/**
@@ -171,11 +190,15 @@ namespace LIBGEODESIC {
 		 * return patch correction success
 		 */
 		bool GeodesicFlow(std::vector<CPointEx3D>& path, double lambda = 0.05, double mu = -0.06, double alpha = 0.5);
-        double getGeodesicFlowMKL(const std::vector<CPointEx3D>& curvePoints, const std::vector<CPointEx3D>& curveNormals,
+		bool GeodesicFlowEqConst(std::vector<CPointEx3D>& path, double lambda = 0.05, double mu = -0.06, double alpha = 0.5);
+		double getGeodesicFlowMKL(const std::vector<CPointEx3D>& curvePoints, const std::vector<CPointEx3D>& curveNormals,
                                   _mem_vecs* memory_vecs = nullptr);
+		double getGeodesicFlowMKL(const std::vector<CPointEx3D>& curvePoints, const std::vector<CPointEx3D>& curveNormals,
+			_mem_vecs_eq* memory_vecs = nullptr);
         void getNormalWithGabrielNeighborWeighting(const std::vector<CPointEx3D>& pointPath,
                                                    std::vector<CPointEx3D>& normalPath) const;
 	private:
+		void createD2FConstantPart(_mem_vecs_eq& mem_vectors);
 		void updateSpatialTree();
 		static CDoubleMatrix CreateEGGLocalCoordinateSystem(const CPointEx3D& o, const CPointEx3D& d);
 		static void CreateEGGLocalCoordinateSystem(Matrix4x4& transformationMatrix, const CPointEx3D& o, const CPointEx3D& d);

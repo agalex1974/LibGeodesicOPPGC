@@ -593,6 +593,158 @@ bool CPointCloud::GeodesicFlow(std::vector<CPointEx3D>& path, double lambda, dou
     return true;
 }
 
+void CPointCloud::createD2FConstantPart(_mem_vecs_eq& mem_vectors) {
+    int m = mem_vectors.m;
+    memset(mem_vectors.constStartFinish, 0, 18 * m * m * sizeof(double));
+
+    int j = 0;
+    for (int i = 0; i < 3; i++)
+    {
+        mem_vectors.constStartFinish[3 * m * i + j] = 1;
+        j += 1;
+    }
+
+    j = 3 * m - 3;
+    for (int i = 3; i < 6; i++)
+    {
+        mem_vectors.constStartFinish[3 * m * i + j] = 1;
+        j += 1;
+    }
+
+    for (int i = 0; i < 3 * m; i++) {
+        for (int j = 0; j < 6; j++) {
+            mem_vectors.constStartFinishT[i * 6 + j] = mem_vectors.constStartFinish[j * 3 * m + i];
+        }
+    }
+    
+    memset(mem_vectors.D2Faug, 0, (3 * m + 6) * (3 * m + 6) * sizeof(double));
+
+#pragma omp parallel for
+    for (int i = 0; i < 3 * m; i++) {
+        memcpy(mem_vectors.D2Faug + (3 * m + 6) * i + 3 * m, mem_vectors.constStartFinishT + 6 * i, 6 * sizeof(double));
+    }
+
+#pragma omp parallel for
+    for (int i = 3 * m; i < 3 * m + 6; i++) {
+        memcpy(mem_vectors.D2Faug + (3 * m + 6) * i, mem_vectors.constStartFinish + 3 * m * (i - 3 * m), 3 * m * sizeof(double));
+    }
+}
+
+bool CPointCloud::GeodesicFlowEqConst(std::vector<CPointEx3D>& path, double lambda, double mu, double alpha)
+{
+    std::cout << "GeodesicFlowEq" << std::endl;
+    std::vector<CPointEx3D> pathNormals(path.size());
+    getNormalWithGabrielNeighborWeighting(path, pathNormals);
+    double maxx = -1e10;
+    double minx = 1e10;
+    double maxy = -1e10;
+    double miny = 1e10;
+    double maxz = -1e10;
+    double minz = 1e10;
+    for (int i = 0; i < points->size(); i++)
+    {
+        if ((*points)[i].x > maxx) maxx = (*points)[i].x;
+        if ((*points)[i].x < minx) minx = (*points)[i].x;
+        if ((*points)[i].y > maxy) maxy = (*points)[i].y;
+        if ((*points)[i].y < miny) miny = (*points)[i].y;
+        if ((*points)[i].z > maxz) maxz = (*points)[i].z;
+        if ((*points)[i].z < minz) minz = (*points)[i].z;
+    }
+
+    double max = maxx;
+    if (max < maxy) max = maxy;
+    if (max < maxz) max = maxz;
+
+    double min = minx;
+    if (min > miny) min = miny;
+    if (min > minz) min = minz;
+    auto EucledianDistance = [this](int i, int j)
+    {
+        return ((*points)[i] - (*points)[j]).norm();
+    };
+
+    std::for_each(path.begin(), path.end(),
+        [min, max](CPointEx3D& p) {p = normalizeCoordinate(p, min, max); });
+
+    std::vector<CPointEx3D> normalizedPoints = *points;
+    std::for_each(normalizedPoints.begin(), normalizedPoints.end(),
+        [min, max](CPointEx3D& p) {p = normalizeCoordinate(p, min, max); });
+
+    std::vector<CPointEx3D> correctedCurve = path;
+    int m = path.size();
+    double length1 = sqr_length(path);
+    double length2 = -1e12;
+    const double TOL = 1e-6 * 1e-6; // convergence criterion
+    int k = 0;
+    auto start = std::chrono::steady_clock::now();
+    _mem_vecs_eq mem_vectors;
+    mem_vectors.Init(m);
+
+    int j = 0;
+    memset(mem_vectors.pm, 0, 6 * sizeof(double));
+    
+    j = 0;
+    for (int i = 0; i < 3; i++) {
+        mem_vectors.D[i] = path[0][j++];
+    }
+    j = 0;
+    for (int i = 3; i < 6; i++) {
+        mem_vectors.D[i] = path[m - 1][j++];
+    }
+
+    FILE* file = fopen("Flows.txt", "w");
+    while (k++ < 24 && fabs(length2 - length1)>TOL) {
+        std::cout << "iteration:" << k << std::endl;
+        double flow = getGeodesicFlowMKL(path, pathNormals, &mem_vectors);
+        CMathUtilities::ConjugateGradientMKL(mem_vectors.D2Faug, mem_vectors.DFaug, mem_vectors.DFaug, 4 * m + 6);
+        for (int i = 0; i < m; i++) {
+            CPointEx3D pk(mem_vectors.DFaug[3 * i + 0], mem_vectors.DFaug[3 * i + 1], mem_vectors.DFaug[3 * i + 2]);
+            auto p = path[i] + pk;
+            correctedCurve[i] = p;
+        }
+        for (int i = 0; i < 6; i++) {
+            mem_vectors.pm[i] += mem_vectors.DFaug[3 * m + i];
+        }
+        calculateGeodesicPositionAndNormals(normalizedPoints, correctedCurve, pathNormals, min, max, alpha);
+        path = correctedCurve;
+        std::vector<CPointEx3D> pathSmooth = path;
+
+        for (int l = 0; l < 4; l++)
+        {
+            for (int i = 1; i < path.size() - 1; i++)
+            {
+                auto Laplacian = 0.5 * (path[i + 1] + path[i - 1]) - path[i];
+                pathSmooth[i] = path[i] + lambda * Laplacian;
+            }
+            swap(path, pathSmooth);
+            for (int i = 1; i < path.size() - 1; i++)
+            {
+                auto Laplacian = 0.5 * (path[i + 1] + path[i - 1]) - path[i];
+                pathSmooth[i] = path[i] + mu * Laplacian;
+            }
+            swap(path, pathSmooth);
+        }
+
+        if (length2 < 0)
+            length2 = sqr_length(path);
+        else
+        {
+            length1 = length2;
+            length2 = sqr_length(path);
+        }
+    }
+
+    auto end = std::chrono::steady_clock::now();
+    std::cout << "Elapsed time in milliseconds: "
+        << std::chrono::duration_cast<std::chrono::milliseconds> (end - start).count()
+        << " ms" << std::endl;
+    std::cout << "iterations taken:" << k << std::endl;
+    std::for_each(path.begin(), path.end(),
+        [min, max](CPointEx3D& p) {p = denormalizeCoordinate(p, min, max); });
+    mem_vectors.Destroy();
+    return true;
+}
+
 void CPointCloud::calculateNeighbors(std::vector<std::vector<int>>& NNs, int neighborCount) const
 {
 	int pointsCount = points->size();
@@ -694,6 +846,93 @@ double CPointCloud::getGeodesicFlowMKL(const std::vector<CPointEx3D>& curvePoint
     return 1.0/sqrt(m) * flow_norm;
 }
 
+double CPointCloud::getGeodesicFlowMKL(const std::vector<CPointEx3D>& curvePoints, const std::vector<CPointEx3D>& curveNormals, _mem_vecs_eq* mv) {
+    int m = curvePoints.size();
+    bool memory_already_allocated = false;
+    if (!mv) {
+        mv = new _mem_vecs_eq;
+        mv->Init(m);
+    }
+    else
+    {
+        memory_already_allocated = true;
+    }
+
+    memset(mv->K, 0, 9 * m * m * sizeof(double));
+
+    int j = 0;
+    for (int i = 3; i < 3 * m - 3; i++) {
+        mv->K[3 * m * i + j] = -1;
+        mv->K[3 * m * i + j + 3] = 2;
+        mv->K[3 * m * i + j + 6] = -1;
+        j++;
+    }
+
+    cblas_dcopy(9 * m * m, mv->K, 1, mv->D2F, 1);
+
+    memset(mv->nT, 0, 3 * m * m * sizeof(double));
+    j = 0;
+    for (int i = 0; i < m; i++) {
+        mv->nT[3 * m * i + j] = curveNormals[i].x;
+        mv->nT[3 * m * i + j + 1] = curveNormals[i].y;
+        mv->nT[3 * m * i + j + 2] = curveNormals[i].z;
+        j += 3;
+    }
+
+    int mm = 3 * m, kk = m, nn = 3 * m;
+    double alpha = 1.0, beta = 0.0;
+
+    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, mm, nn, kk, alpha, mv->nT, mm, mv->nT, mm, beta, mv->nStar, nn);
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, mm, mm, mm, -1.0, mv->nStar, mm, mv->K, mm, 1.0, mv->D2F, mm);
+    cblas_dcopy(9 * m * m, mv->D2F, 1, mv->kG, 1);
+    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, mm, mm, mm, 1.0, mv->D2F, mm, mv->D2F, mm, 0.0, mv->K, mm);
+    cblas_dcopy(9 * m * m, mv->K, 1, mv->D2F, 1);
+    // It has now the Jacobian
+
+#pragma omp parallel for
+    for (int i = 0; i < 3 * m; i++) {
+        memcpy(mv->D2Faug + (3 * m + 6) * i, mv->D2F + 3 * m * i, 3 * m * sizeof(double));
+    }
+    
+    // We got the augmented Jacobian
+#pragma omp parallel for
+    for (int i = 0; i < m; i++) {
+        mv->p[3 * i + 0] = curvePoints[i].x;
+        mv->p[3 * i + 1] = curvePoints[i].y;
+        mv->p[3 * i + 2] = curvePoints[i].z;
+    }
+
+    cblas_dgemv(CblasRowMajor, CblasNoTrans, 3 * m, 3 * m, -1.0, mv->D2F, 3 * m, mv->p, 1, 0.0, mv->DF, 1);
+    // DF = -AeT*m + DF; 
+    cblas_dgemv(CblasRowMajor, CblasNoTrans, 3 * m, 6, -1.0, mv->constStartFinishT, 6, mv->pm, 1, 1.0, mv->DF, 1);
+    cblas_dgemv(CblasRowMajor, CblasNoTrans, 6, 3 * m, -1.0, mv->constStartFinish, 3 * m, mv->p, 1, 0.0, mv->Dm, 1);
+    //std::cout << "END!" << std::endl;
+
+#pragma omp parallel for
+    for (int i = 0; i < 6; i++) {
+        mv->Dm[i] += mv->D[i];
+    }
+
+#pragma omp parallel for
+    for (int i = 0; i < 3 * m; i++) {
+        mv->DFaug[i] = mv->DF[i];
+    }
+
+#pragma omp parallel for
+    for (int i = 3 * m; i < 3 * m + 6; i++) {
+        mv->DFaug[i] = mv->Dm[i - 3 * m];
+    }
+
+    cblas_dgemv(CblasRowMajor, CblasNoTrans, 3 * m, 3 * m, 1.0, mv->kG, 3 * m, mv->p, 1, 0.0, mv->flow, 1);
+
+    double flow_norm = cblas_dnrm2(3 * m, mv->flow, 1);
+    if (!memory_already_allocated)
+    {
+        mv->Destroy();
+        mv = nullptr;
+    }
+    return 1.0 / sqrt(m) * flow_norm;
+}
 CPointCloud::~CPointCloud()
 {
 	clear();
@@ -947,4 +1186,41 @@ void CPointCloud::getNormalWithGabrielNeighborWeighting(const std::vector<CPoint
                               }
                           }
                       });
+}
+
+void CPointCloud::_mem_vecs_eq::Init(int m_) {
+    m = m_;
+    K = (double*)mkl_malloc(9 * m * m * sizeof(double), 64);
+    nStar = (double*)mkl_malloc(9 * m * m * sizeof(double), 64);
+    kG = (double*)mkl_malloc(9 * m * m * sizeof(double), 64);
+    nT = (double*)mkl_malloc(3 * m * m * sizeof(double), 64);
+    p = (double*)mkl_malloc(3 * m * sizeof(double), 64);
+    pm = (double*)mkl_malloc(6 * sizeof(double), 64);
+    D = (double*)mkl_malloc(6 * sizeof(double), 64);
+    flow = (double*)mkl_malloc(3 * m * sizeof(double), 64);
+    D2F = (double*)mkl_malloc(9 * m * m * sizeof(double), 64);
+    DF = (double*)mkl_malloc(3 * m * sizeof(double), 64);
+    D2Faug = (double*)mkl_malloc((3 * m + 6) * (3 * m + 6) * sizeof(double), 64);
+    DFaug = (double*)mkl_malloc((3 * m + 6) * sizeof(double), 64);
+    Dm = (double*)mkl_malloc(6 * sizeof(double), 64);
+    constStartFinish = (double*)mkl_malloc(3 * m * 6 * sizeof(double), 64);
+    constStartFinishT = (double*)mkl_malloc(3 * m * 6 * sizeof(double), 64);
+}
+
+void CPointCloud::_mem_vecs_eq::Destroy() {
+    if (K) mkl_free(K); K = 0;
+    if (nStar) mkl_free(nStar); nStar = 0;
+    if (constStartFinish) mkl_free(constStartFinish); constStartFinish = 0;
+    if (constStartFinishT) mkl_free(constStartFinishT); constStartFinishT = 0;
+    if (kG) mkl_free(kG); kG = 0;
+    if (nT) mkl_free(nT); nT = 0;
+    if (p) mkl_free(p); p = 0;
+    if (flow) mkl_free(flow); flow = 0;
+    if (D2F) mkl_free(D2F); D2F = 0;
+    if (DF) mkl_free(DF); DF = 0;
+    if (pm) mkl_free(pm); pm = 0;
+    if (Dm) mkl_free(Dm); Dm = 0;
+    if (D2Faug) mkl_free(D2Faug); D2Faug = 0;
+    if (DFaug) mkl_free(DFaug); DFaug = 0;
+    if (D) mkl_free(D); D = 0;
 }
